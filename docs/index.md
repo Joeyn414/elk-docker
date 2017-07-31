@@ -13,6 +13,7 @@ This web page documents how to use the [sebp/elk](https://hub.docker.com/r/sebp/
 	- [Creating a dummy log entry](#creating-dummy-log-entry)
 	- [Starting services selectively](#selective-services)
 	- [Overriding start-up variables](#overriding-variables)
+	- [Pre-hooks](#pre-hooks)
 - [Forwarding logs](#forwarding-logs)
 	- [Forwarding logs with Filebeat](#forwarding-logs-filebeat)
 	- [Linking a Docker container to the ELK container](#linking-containers)
@@ -159,15 +160,10 @@ Open a shell prompt in the container and type (replacing `<container-name>` with
 
 At the prompt, enter:
 
-_(since Logstash 2.0.0)_
+	# /opt/logstash/bin/logstash --path.data /tmp/logstash/data \
+		-e 'input { stdin { } } output { elasticsearch { hosts => ["localhost"] } }'
 
-	# /opt/logstash/bin/logstash -e 'input { stdin { } } output { elasticsearch { hosts => ["localhost"] } }'
-
-_(before Logstash 2.0.0)_
-
-	# /opt/logstash/bin/logstash -e 'input { stdin { } } output { elasticsearch { host => localhost } }'
-
-Wait for Logstash to start (as indicated by the message `Logstash startup completed`), then type some dummy text followed by Enter to create a log entry:
+Wait for Logstash to start (as indicated by the message `The stdin plugin is now waiting for input:`), then type some dummy text followed by Enter to create a log entry:
 
 	this is a dummy entry
 
@@ -245,11 +241,30 @@ The following environment variables can be used to override the defaults used to
 
 - `NODE_OPTIONS`: Node options for Kibana (default: `"--max-old-space-size=250"`)
 
+- `MAX_MAP_COUNT`: limit on mmap counts (default: system default)
+
+	**Warning** – This setting is system-dependent: not all systems allow this limit to be set from within the container, you may need to set this from the host before starting the container (see [Prerequisites](#prerequisites)). 
+
+- `MAX_OPEN_FILES`: maximum number of open files (default: system default; Elasticsearch needs this amount to be equal to at least 65536)
+
 As an illustration, the following command starts the stack, running Elasticsarch with a 2GB heap size, Logstash with a 1GB heap size and Logstash's configuration auto-reload disabled:
 
 	$ sudo docker run -p 5601:5601 -p 9200:9200 -p 5044:5044 -it \
 		-e ES_HEAP_SIZE="2g" -e LS_HEAP_SIZE="1g" -e LS_OPTS="--no-auto-reload" \
 		--name elk sebp/elk
+
+### Pre-hooks <a name="pre-hooks"></a>
+
+Before starting the ELK services, the container will run the script at `/usr/local/bin/elk-pre-hooks.sh` if it exists and is executable.
+
+This can in particular be used to expose custom environment variables (in addition to the [default ones supported by the image](#overriding-variables)) to Elasticsearch and Logstash by amending their corresponding `/etc/default` files.
+
+For instance, to expose the custom `MY_CUSTOM_VAR` environment variable to Elasticsearch, add an executable `/usr/local/bin/elk-pre-hooks.sh` to the container (e.g. by `ADD`-ing it to a custom `Dockerfile` that extends the base image, or by bind-mounting the file at runtime), with the following contents:
+
+	cat << EOF >> /etc/default/elasticsearch
+	MY_CUSTOM_VAR=$MY_CUSTOM_VAR
+	export MY_CUSTOM_VAR 
+	EOF
 
 ## Forwarding logs <a name="forwarding-logs"></a>
 
@@ -396,8 +411,8 @@ A `Dockerfile` like the following will extend the base image and install the [Ge
 	ENV ES_HOME /opt/elasticsearch
 	WORKDIR ${ES_HOME}
 
-	RUN gosu elasticsearch bin/elasticsearch-plugin install \
-	    -Edefault.path.conf=/etc/elasticsearch ingest-geoip
+	RUN CONF_DIR=/etc/elasticsearch gosu elasticsearch bin/elasticsearch-plugin \
+		install ingest-geoip
 
 You can now build the new image (see the *[Building the image](#building-image)* section above) and run the container in the same way as you did with the base image.
 
